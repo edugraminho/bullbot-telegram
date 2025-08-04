@@ -1,0 +1,1 @@
+# BullBot Telegram - Bot do Telegram para sinais de trading 

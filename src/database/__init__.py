@@ -1,0 +1,1 @@
+# Conexão com banco de dados do BullBot Signals 

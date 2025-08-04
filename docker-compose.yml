@@ -1,0 +1,38 @@
+services:
+  telegram_bot:
+    build:
+      context: .
+    command: python -c "import sys; print('Starting bot...'); import asyncio; from src.integrations.telegram_handlers import run_telegram_bot; print('Import successful'); asyncio.run(run_telegram_bot())"
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    networks:
+      - telegram_network
+    restart: unless-stopped
+
+  celery_worker:
+    build:
+      context: .
+    command: celery -A src.tasks.celery_app worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    networks:
+      - telegram_network
+
+  redis:
+    image: redis:8.0
+    ports:
+      - "6380:6379"
+    networks:
+      - telegram_network
+
+networks:
+  telegram_network:
+    driver: bridge 
