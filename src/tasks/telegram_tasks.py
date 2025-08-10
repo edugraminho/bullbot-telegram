@@ -1,252 +1,173 @@
 """
 Tasks Celery para Telegram - BullBot Telegram
+Simplificado para leitura e envio de sinais
 """
 
+import os
 from celery import current_app
 from src.tasks.celery_app import celery_app
 from src.integrations.telegram_bot import telegram_client
-from src.database.models import SignalHistory
-from src.database.connection import SessionLocal
+from src.services.signal_reader import signal_reader
 from src.utils.logger import get_logger
 import asyncio
-import random
-from telegram.error import TimedOut, NetworkError, RetryAfter
-from src.database.models import TelegramSubscription
+import redis
 
 logger = get_logger(__name__)
 
-
-async def send_message_with_retry(
-    bot, chat_id: str, message_text: str, max_retries: int = 3
-) -> bool:
-    """
-    Envia mensagem com retry inteligente e backoff exponencial
-
-    Args:
-        bot: Instância do bot Telegram
-        chat_id: ID do chat
-        message_text: Texto da mensagem
-        max_retries: Máximo de tentativas
-
-    Returns:
-        True se enviou com sucesso, False caso contrário
-    """
-
-    for attempt in range(max_retries + 1):
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=message_text,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
-            return True
-
-        except RetryAfter as e:
-            # API rate limit - esperar o tempo indicado
-            wait_time = e.retry_after + random.uniform(0.1, 0.5)  # Jitter
-            logger.warning(
-                f"⏳ Rate limit para chat {chat_id}: aguardando {wait_time:.1f}s"
-            )
-            await asyncio.sleep(wait_time)
-
-        except (TimedOut, NetworkError) as e:
-            if attempt < max_retries:
-                # Backoff exponencial com jitter
-                wait_time = (2**attempt) + random.uniform(0.1, 1.0)
-                logger.warning(
-                    f"🔄 Tentativa {attempt + 1}/{max_retries + 1} para chat {chat_id} - aguardando {wait_time:.1f}s"
-                )
-                await asyncio.sleep(wait_time)
-            else:
-                logger.error(f"❌ Falha definitiva para chat {chat_id}: {e}")
-                return False
-
-        except Exception as e:
-            logger.error(f"❌ Erro inesperado para chat {chat_id}: {e}")
-            return False
-
-    return False
-
-
-class TelegramTaskConfig:
-    """Configuração para tasks do Telegram"""
-
-    def __init__(self):
-        self.max_retries = 3
-        self.retry_countdown = 60
-        self.cleanup_days = 30
-
-
-# Instância global de configuração
-telegram_config = TelegramTaskConfig()
+# Cliente Redis para cache de estado - usando getenv diretamente
+redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+redis_client = redis.from_url(redis_url)
 
 
 @celery_app.task(bind=True, max_retries=3)
-def send_telegram_signal(self, signal_data):
+def process_unprocessed_signals(self):
     """
-    Task para enviar sinal via Telegram
-
-    Args:
-        signal_data: Dicionário com dados do sinal
+    Task principal para processar sinais não processados
+    Agora mais inteligente com cache e detecção de mudanças
     """
     try:
-        # Verificar se o cliente Telegram está disponível
-        if telegram_client is None:
-            logger.error(
-                "❌ Cliente Telegram não está disponível - verificar TELEGRAM_BOT_TOKEN"
-            )
-            return {"status": "failed", "error": "Telegram client not available"}
+        logger.info("🚀 Iniciando processamento de sinais não processados")
 
-        symbol = signal_data.get("symbol", "UNKNOWN")
-        signal_type = signal_data.get("signal_type", "UNKNOWN")
-        rsi_value = signal_data.get("rsi_value", 0)
-        current_price = signal_data.get("current_price", 0)
-        strength = signal_data.get("strength", "UNKNOWN")
-        timeframe = signal_data.get("timeframe", "UNKNOWN")
-        message = signal_data.get("message", "")
-        source = signal_data.get("source", "UNKNOWN")
-        timestamp = signal_data.get("timestamp", "")
+        # 1. Verificar se houve mudanças usando cache (otimização)
+        cache_key = "last_signal_count"
+        current_count = signal_reader.get_unprocessed_signals_count()
 
+        logger.info(f"📊 Sinais não processados encontrados: {current_count}")
+
+        # Buscar último count do cache
+        last_count = redis_client.get(cache_key)
+        last_count = int(last_count) if last_count else 0
+
+        # Se não há mudanças, não processar (economia de recursos)
+        if current_count == last_count:
+            logger.info("ℹ️ Nenhum sinal novo detectado - pulando processamento")
+            return {"status": "no_changes", "message": "Nenhum sinal novo detectado"}
+
+        # Atualizar cache
+        redis_client.setex(cache_key, 300, current_count)  # Expira em 5 min
+
+        # 2. Se há mudanças, processar sinais
         logger.info(
-            f"🚀 Iniciando envio de sinal Telegram para {symbol}: {signal_type}"
+            f"🆕 Detectados {current_count - last_count} sinais novos! Iniciando processamento..."
         )
 
-        # Usar um único loop para toda a operação
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Buscar sinais não processados
+        signals = signal_reader.get_unprocessed_signals(limit=50)
 
-        try:
-            # Função assíncrona principal que executa todas as operações
-            async def process_telegram_signal():
-                # Obter assinantes ativos
-                logger.info(f"🔍 Buscando assinantes para {symbol}...")
-                chat_ids = await telegram_client.get_active_subscribers(symbol)
-                logger.info(f"📋 Encontrados {len(chat_ids)} assinantes para {symbol}")
+        if not signals:
+            logger.info("ℹ️ Nenhum sinal não processado encontrado")
+            return {"status": "no_signals", "processed_count": 0, "errors": []}
 
-                if not chat_ids:
-                    logger.warning(f"❌ Nenhum assinante ativo para {symbol}")
-                    return {"status": "no_subscribers", "symbol": symbol}
+        logger.info(f"📋 Encontrados {len(signals)} sinais para processar")
 
-                # Enviar sinal para todos os assinantes
-                success_count = 0
-                failed_count = 0
+        # Por enquanto, apenas marcar como processados sem enviar para Telegram
+        # para identificar se o problema está na conexão com o banco ou Telegram
+        processed_count = 0
+        errors = []
 
-                for chat_id in chat_ids:
-                    try:
-                        # Enviar mensagem com retry
-                        success = await send_message_with_retry(
-                            telegram_client.bot,
-                            chat_id,
-                            message,
-                            telegram_config.max_retries,
-                        )
+        for signal in signals:
+            try:
+                # Marcar como processado diretamente
+                success = signal_reader.mark_signal_processed(signal["id"])
 
-                        if success:
-                            success_count += 1
-                            logger.info(f"✅ Sinal enviado para chat {chat_id}")
-                        else:
-                            failed_count += 1
-                            logger.error(f"❌ Falha ao enviar para chat {chat_id}")
+                if success:
+                    processed_count += 1
+                    logger.info(
+                        f"✅ Sinal {signal['id']} ({signal['symbol']}) marcado como processado"
+                    )
+                else:
+                    errors.append(
+                        f"Falha ao marcar sinal {signal['id']} como processado"
+                    )
+                    logger.error(
+                        f"❌ Falha ao marcar sinal {signal['id']} como processado"
+                    )
 
-                    except Exception as e:
-                        failed_count += 1
-                        logger.error(f"❌ Erro ao enviar para chat {chat_id}: {e}")
+            except Exception as e:
+                error_msg = f"Erro no sinal {signal['id']}: {str(e)}"
+                errors.append(error_msg)
+                logger.error(f"❌ {error_msg}")
 
-                # Marcar como enviado no banco
-                await _mark_signal_as_sent(symbol, timestamp)
+        logger.info(f"🎯 Processamento concluído: {processed_count} sinais processados")
 
-                return {
-                    "status": "completed",
-                    "symbol": symbol,
-                    "success_count": success_count,
-                    "failed_count": failed_count,
-                    "total_subscribers": len(chat_ids),
-                }
-
-            # Executar função assíncrona
-            result = loop.run_until_complete(process_telegram_signal())
-            return result
-
-        finally:
-            loop.close()
+        return {
+            "status": "completed",
+            "processed_count": processed_count,
+            "total_signals": len(signals),
+            "new_signals_detected": current_count - last_count,
+            "errors": errors,
+        }
 
     except Exception as e:
-        logger.error(f"❌ Erro na task send_telegram_signal: {e}")
+        logger.error(f"❌ Erro na task process_unprocessed_signals: {e}")
         # Retry automático em caso de erro
-        raise self.retry(countdown=telegram_config.retry_countdown, exc=e)
-
-
-async def _mark_signal_as_sent(symbol: str, timestamp: str):
-    """Marcar sinal como enviado no banco de dados"""
-    try:
-        db = SessionLocal()
-
-        # Buscar sinal mais recente do símbolo
-        signal = (
-            db.query(SignalHistory)
-            .filter(SignalHistory.symbol == symbol)
-            .order_by(SignalHistory.created_at.desc())
-            .first()
-        )
-
-        if signal and not signal.telegram_sent:
-            signal.telegram_sent = True
-            db.commit()
-            logger.info(f"✅ Sinal marcado como enviado para {symbol}")
-
-        db.close()
-
-    except Exception as e:
-        logger.error(f"❌ Erro ao marcar sinal como enviado: {e}")
+        raise self.retry(countdown=60, exc=e)
 
 
 @celery_app.task
-def test_telegram_connection():
-    """Task para testar conexão com Telegram"""
+def test_connections():
+    """Task para testar conexões com banco e Telegram"""
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         try:
-            success = loop.run_until_complete(telegram_client.test_connection())
-            return {"status": "success" if success else "failed"}
+            # Testar conexão com banco (agora síncrono)
+            signals_ok = signal_reader.test_connection()
+
+            # Testar conexão com Telegram
+            telegram_ok = loop.run_until_complete(telegram_client.test_connection())
+
+            status = {
+                "database": "ok" if signals_ok else "error",
+                "telegram": "ok" if telegram_ok else "error",
+                "overall": "ok" if (signals_ok and telegram_ok) else "error",
+            }
+
+            logger.info(f"Status das conexões: {status}")
+            return status
+
         finally:
             loop.close()
 
     except Exception as e:
-        logger.error(f"❌ Erro no teste de conexão Telegram: {e}")
+        logger.error(f"❌ Erro no teste de conexões: {e}")
         return {"status": "error", "error": str(e)}
 
 
 @celery_app.task
-def cleanup_inactive_subscriptions():
-    """Task para limpar assinaturas inativas antigas"""
+def get_system_status():
+    """Task para obter status do sistema via banco direto"""
     try:
-        from datetime import datetime, timedelta, timezone
+        # Agora é síncrono - não precisa de loop
+        status = signal_reader.get_system_status()
+        return status
+    except Exception as e:
+        logger.error(f"❌ Erro ao obter status: {e}")
+        return {"status": "error", "error": str(e)}
 
-        db = SessionLocal()
 
-        # Remover assinaturas inativas com mais de 30 dias
-        cutoff_date = datetime.now(timezone.utc) - timedelta(
-            days=telegram_config.cleanup_days
-        )
+@celery_app.task
+def cleanup_old_data():
+    """Task para limpeza e otimizações periódicas"""
+    try:
+        # Limpar cache Redis antigo
+        cache_keys = ["last_signal_count", "signal_cache_*"]
+        for pattern in cache_keys:
+            keys = redis_client.keys(pattern)
+            if keys:
+                redis_client.delete(*keys)
+                logger.info(f"Limpos {len(keys)} keys do cache Redis")
 
-        deleted_count = (
-            db.query(TelegramSubscription)
-            .filter(
-                TelegramSubscription.active == False,  # noqa: E712
-                TelegramSubscription.created_at < cutoff_date,
-            )
-            .delete()
-        )
+        # Verificar e otimizar conexões
+        status = signal_reader.get_system_status()
 
-        db.commit()
-        db.close()
-
-        logger.info(f"🧹 Removidas {deleted_count} assinaturas inativas antigas")
-        return {"status": "completed", "deleted_count": deleted_count}
+        return {
+            "status": "cleanup_completed",
+            "cache_cleaned": True,
+            "system_status": status,
+        }
 
     except Exception as e:
-        logger.error(f"❌ Erro na limpeza de assinaturas: {e}")
+        logger.error(f"❌ Erro na limpeza: {e}")
         return {"status": "error", "error": str(e)}

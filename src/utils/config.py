@@ -15,37 +15,35 @@ class Settings(BaseSettings):
     # Token do bot Telegram
     telegram_bot_token: str
 
+    # Chat ID do grupo para envio de sinais
+    telegram_group_chat_id: str
+
     # Configurações de Conexão
-    telegram_connection_pool_size: int = 20  # Pool de conexões HTTP
-    telegram_pool_timeout: int = 60  # Timeout do pool em segundos
-    telegram_batch_size: int = 5  # Máximo de envios simultâneos
-
-    # ===============================================
-    # Database Settings
-    # ===============================================
-
-    # Conexão com banco do BullBot Signals
-    database_url: str
-
-    # ===============================================
-    # Redis Settings
-    # ===============================================
-
-    # Conexão Redis
-    redis_url: str = "redis://redis:6379/0"
+    telegram_connection_pool_size: int = (
+        10  # Pool de conexões HTTP (reduzido para t2.micro)
+    )
+    telegram_pool_timeout: int = 30  # Timeout do pool em segundos
+    telegram_batch_size: int = (
+        3  # Máximo de envios simultâneos (reduzido para t2.micro)
+    )
 
     # ===============================================
     # Celery Settings
     # ===============================================
 
     # Configurações de Concorrência
-    celery_worker_count: int = 2  # Número de workers
-    celery_tasks_per_worker: int = 1  # Tasks por worker
+    celery_worker_count: int = 1  # Apenas 1 worker para t2.micro
+    celery_tasks_per_worker: int = 1  # 1 task por worker
     celery_task_acknowledge_late: bool = True
 
     # Configurações de Timeout (segundos)
-    celery_task_warning_timeout: int = 300  # 5 min - aviso de timeout
-    celery_task_force_kill_timeout: int = 600  # 10 min - força encerramento
+    celery_task_warning_timeout: int = 180  # 3 min - aviso de timeout
+    celery_task_force_kill_timeout: int = 300  # 5 min - força encerramento
+
+    # Configurações de Performance
+    celery_worker_prefetch_multiplier: int = 1  # Prefetch mínimo
+    celery_task_soft_time_limit: int = 180  # Soft limit 3 min
+    celery_task_time_limit: int = 300  # Hard limit 5 min
 
     # ===============================================
     # Logging Settings
@@ -59,5 +57,5 @@ class Settings(BaseSettings):
         extra = "ignore"
 
 
-# Global instance of settings
+# Instância global das configurações
 settings = Settings()

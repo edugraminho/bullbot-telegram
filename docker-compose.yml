@@ -10,7 +10,7 @@ services:
     env_file:
       - .env
     networks:
-      - telegram_network
+      - bullbot_network
     restart: unless-stopped
 
   celery_worker:
@@ -24,15 +24,29 @@ services:
     env_file:
       - .env
     networks:
-      - telegram_network
+      - bullbot_network
+
+  celery_beat:
+    build:
+      context: .
+    command: celery -A src.tasks.celery_app beat --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    networks:
+      - bullbot_network
 
   redis:
-    image: redis:8.0
+    image: redis:8.0-alpine
     ports:
       - "6380:6379"
     networks:
-      - telegram_network
+      - bullbot_network
 
 networks:
-  telegram_network:
-    driver: bridge 
+  bullbot_network:
+    external: true
+    name: bullbot-signals_bullbot_network 
