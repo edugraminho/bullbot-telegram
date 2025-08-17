@@ -111,7 +111,18 @@ class SignalReader:
         """
         try:
             db = next(get_db())
+            return self.mark_signal_processed_with_session(signal_id, db)
+        except Exception as e:
+            self.logger.error(
+                f"❌ Erro ao marcar sinal {signal_id} como processado: {e}"
+            )
+            return False
 
+    def mark_signal_processed_with_session(self, signal_id: int, db: Session) -> bool:
+        """
+        Marcar sinal como processado usando sessão fornecida
+        """
+        try:
             # Atualizar diretamente no banco
             signal = (
                 db.query(SignalHistory).filter(SignalHistory.id == signal_id).first()

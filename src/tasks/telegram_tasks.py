@@ -10,6 +10,7 @@ from src.integrations.telegram_bot import telegram_client
 from src.services.signal_reader import signal_reader
 from src.services.signal_dispatch_service import signal_dispatch_service
 from src.services.user_config_service import user_config_service
+from src.database.connection import get_db
 from src.utils.logger import get_logger
 import asyncio
 import redis
@@ -68,6 +69,8 @@ def process_unprocessed_signals(self):
         errors = []
 
         for signal in signals:
+            # Criar uma sessão específica para este sinal - evita pool exhaustion
+            db_session = None
             try:
                 signal_id = signal["id"]
                 symbol = signal.get("symbol", "")
@@ -76,9 +79,14 @@ def process_unprocessed_signals(self):
                     f"Processando sinal {signal_id}: {symbol} {signal.get('timeframe', '')} {signal.get('signal_type', '')}"
                 )
 
-                # 3. Determinar usuários elegíveis para este sinal
-                eligible_users = signal_dispatch_service.get_eligible_users_for_signal(
-                    signal
+                # Criar sessão reutilizável para todo o processamento deste sinal
+                db_session = next(get_db())
+
+                # 3. Determinar usuários elegíveis para este sinal (reutilizando sessão)
+                eligible_users = (
+                    signal_dispatch_service.get_eligible_users_for_signal_with_session(
+                        signal, db_session
+                    )
                 )
 
                 if not eligible_users:
@@ -90,12 +98,16 @@ def process_unprocessed_signals(self):
 
                     # 4. Enviar sinal para usuários elegíveis
                     signal_sent_count = await_sync(
-                        send_signal_to_users(signal, eligible_users)
+                        send_signal_to_users_with_session(
+                            signal, eligible_users, db_session
+                        )
                     )
                     sent_count += signal_sent_count
 
-                # 5. Marcar sinal como processado
-                success = signal_reader.mark_signal_processed(signal_id)
+                # 5. Marcar sinal como processado (reutilizando sessão)
+                success = signal_reader.mark_signal_processed_with_session(
+                    signal_id, db_session
+                )
 
                 if success:
                     processed_count += 1
@@ -110,6 +122,13 @@ def process_unprocessed_signals(self):
                 error_msg = f"Erro no sinal {signal['id']}: {str(e)}"
                 errors.append(error_msg)
                 logger.error(f"❌ {error_msg}")
+            finally:
+                # Sempre fechar a sessão para liberar conexão
+                if db_session:
+                    try:
+                        db_session.close()
+                    except Exception as e:
+                        logger.warning(f"Erro ao fechar sessão: {e}")
 
         logger.info(
             f"Processamento concluído: {processed_count} sinais processados, {sent_count} envios realizados"
@@ -192,6 +211,48 @@ async def send_signal_to_users(signal_data, eligible_users):
             if success:
                 # Atualizar estatísticas do usuário
                 user_config_service.increment_signals_received(chat_id)
+                sent_count += 1
+                logger.info(f"Sinal enviado com sucesso para {chat_id}")
+            else:
+                logger.error(f"❌ Falha ao enviar sinal para {chat_id}")
+
+        except Exception as e:
+            logger.error(
+                f"❌ Erro ao enviar sinal para {user_info.get('chat_id', 'unknown')}: {e}"
+            )
+
+    return sent_count
+
+
+async def send_signal_to_users_with_session(signal_data, eligible_users, db_session):
+    """
+    Enviar sinal para lista de usuários elegíveis (com sessão de banco fornecida)
+
+    Args:
+        signal_data: Dados do sinal
+        eligible_users: Lista de usuários elegíveis
+        db_session: Sessão de banco de dados reutilizável
+
+    Returns:
+        Número de envios bem-sucedidos
+    """
+    sent_count = 0
+
+    for user_info in eligible_users:
+        try:
+            chat_id = user_info["chat_id"]
+
+            # Enviar sinal personalizado para cada usuário
+            success = await send_signal_to_user(signal_data, chat_id)
+
+            if success:
+                # Atualizar estatísticas do usuário (reutilizando sessão)
+                symbol = signal_data.get("symbol", "")
+                rsi_data = signal_data.get("indicator_data", {})
+                rsi_value = rsi_data.get("rsi_value", 0)
+                user_config_service.increment_signals_received_with_session(
+                    chat_id, db_session, symbol=symbol, rsi_value=rsi_value
+                )
                 sent_count += 1
                 logger.info(f"Sinal enviado com sucesso para {chat_id}")
             else:

@@ -55,6 +55,31 @@ class SignalDispatchService:
             )
 
             db = next(get_db())
+            return self.get_eligible_users_for_signal_with_session(signal_data, db)
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao determinar usuários elegíveis: {e}")
+            return []
+
+    def get_eligible_users_for_signal_with_session(
+        self, signal_data: Dict[str, Any], db: Session
+    ) -> List[Dict[str, Any]]:
+        """
+        Determinar quais usuários devem receber um sinal específico (com sessão fornecida)
+        """
+        try:
+            symbol = signal_data.get("symbol", "").upper()
+            timeframe = signal_data.get("timeframe", "")
+            signal_type = signal_data.get("signal_type", "").upper()
+
+            # Obter dados do RSI
+            rsi_data = signal_data.get("indicator_data", {})
+            rsi_value = rsi_data.get("rsi_value", 0)
+
+            if not symbol or not timeframe or not signal_type:
+                self.logger.warning(
+                    "Dados insuficientes no sinal para determinar usuários elegíveis"
+                )
+                return []
 
             # Buscar usuários ativos diretamente da tabela unificada
             active_configs = (
@@ -86,7 +111,9 @@ class SignalDispatchService:
                 for config in user_configs:
                     if self._is_user_eligible_for_signal(config, signal_data):
                         # Verificar filtros anti-spam
-                        if self._check_anti_spam_filters(config, signal_data):
+                        if self._check_anti_spam_filters_with_session(
+                            config, signal_data, db
+                        ):
                             eligible_users.append(
                                 {
                                     "chat_id": config.chat_id,
@@ -172,6 +199,17 @@ class SignalDispatchService:
     ) -> bool:
         """Verificar filtros anti-spam para evitar sinais excessivos"""
         try:
+            db = next(get_db())
+            return self._check_anti_spam_filters_with_session(config, signal_data, db)
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao verificar filtros anti-spam: {e}")
+            return True  # Em caso de erro, permitir o sinal
+
+    def _check_anti_spam_filters_with_session(
+        self, config: UserMonitoringConfig, signal_data: Dict[str, Any], db: Session
+    ) -> bool:
+        """Verificar filtros anti-spam para evitar sinais excessivos (com sessão fornecida)"""
+        try:
             symbol = signal_data.get("symbol", "").upper()
             timeframe = signal_data.get("timeframe", "")
             strength = signal_data.get("strength", "").upper()
@@ -183,7 +221,9 @@ class SignalDispatchService:
 
             # 1. Verificar limite diário de sinais
             max_signals_per_day = filter_config.get("max_signals_per_day", 3)
-            if not self._check_daily_limit(config.user_id, symbol, max_signals_per_day):
+            if not self._check_daily_limit_with_session(
+                config.user_id, symbol, max_signals_per_day, db
+            ):
                 self.logger.info(
                     f"Usuário {config.user_id} atingiu limite diário para {symbol}"
                 )
@@ -191,8 +231,8 @@ class SignalDispatchService:
 
             # 2. Verificar cooldown por timeframe e força
             cooldown_config = filter_config.get("cooldown_minutes", {})
-            if not self._check_cooldown(
-                config.user_id, symbol, timeframe, strength, cooldown_config
+            if not self._check_cooldown_with_session(
+                config.user_id, symbol, timeframe, strength, cooldown_config, db
             ):
                 self.logger.info(
                     f"Usuário {config.user_id} em cooldown para {symbol} {timeframe} {strength}"
@@ -201,8 +241,8 @@ class SignalDispatchService:
 
             # 3. Verificar diferença mínima de RSI
             min_rsi_diff = filter_config.get("min_rsi_difference", 2.0)
-            if not self._check_rsi_difference(
-                config.user_id, symbol, rsi_value, min_rsi_diff
+            if not self._check_rsi_difference_with_session(
+                config.user_id, symbol, rsi_value, min_rsi_diff, db
             ):
                 self.logger.info(
                     f"Usuário {config.user_id} RSI muito próximo do último sinal para {symbol}"
@@ -219,28 +259,58 @@ class SignalDispatchService:
         """Verificar se usuário não ultrapassou limite diário de sinais"""
         try:
             db = next(get_db())
+            return self._check_daily_limit_with_session(
+                user_id, symbol, max_signals, db
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao verificar limite diário: {e}")
+            return True
 
-            # Contar sinais enviados hoje para este usuário e símbolo
-            today = datetime.now(timezone.utc).date()
-
-            # Como não temos tabela de envios, vamos usar uma heurística baseada em sinais processados
-            # Esta é uma simplificação - idealmente teríamos uma tabela de signal_sends
-            signals_today = (
-                db.query(SignalHistory)
-                .filter(
-                    and_(
-                        SignalHistory.symbol == symbol,
-                        SignalHistory.created_at >= today,
-                        SignalHistory.processed == True,  # noqa: E712
-                    )
-                )
-                .count()
+    def _check_daily_limit_with_session(
+        self, user_id: int, symbol: str, max_signals: int, db: Session
+    ) -> bool:
+        """Verificar se usuário não ultrapassou limite diário de sinais (com sessão fornecida)"""
+        try:
+            # Buscar configuração do usuário para verificar histórico
+            config = (
+                db.query(UserMonitoringConfig)
+                .filter(UserMonitoringConfig.user_id == user_id)
+                .first()
             )
 
-            # Estimativa conservadora: assumir que todos os sinais processados foram enviados
-            estimated_signals_sent = min(signals_today, max_signals + 1)
+            if not config:
+                return True  # Usuário não encontrado, permitir sinal
 
-            return estimated_signals_sent < max_signals
+            # Verificar se é um novo dia (reset do contador)
+            today = datetime.now(timezone.utc).date()
+            last_signal_date = (
+                config.last_signal_at.date() if config.last_signal_at else None
+            )
+
+            # Se não tem histórico ou é um novo dia, permitir
+            if not last_signal_date or last_signal_date < today:
+                return True
+
+            # Verificar contador diário por símbolo usando filter_config como cache
+            daily_counts = (
+                config.filter_config.get("daily_signal_counts", {})
+                if config.filter_config
+                else {}
+            )
+            today_str = today.isoformat()
+
+            # Limpar contadores de dias anteriores
+            if daily_counts.get("date") != today_str:
+                daily_counts = {"date": today_str, "symbols": {}}
+
+            # Verificar contador para este símbolo
+            symbol_count = daily_counts.get("symbols", {}).get(symbol, 0)
+
+            self.logger.info(
+                f"Usuário {user_id} já recebeu {symbol_count}/{max_signals} sinais de {symbol} hoje"
+            )
+
+            return symbol_count < max_signals
 
         except Exception as e:
             self.logger.error(f"❌ Erro ao verificar limite diário: {e}")
@@ -256,6 +326,25 @@ class SignalDispatchService:
     ) -> bool:
         """Verificar se cooldown foi respeitado"""
         try:
+            db = next(get_db())
+            return self._check_cooldown_with_session(
+                user_id, symbol, timeframe, strength, cooldown_config, db
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao verificar cooldown: {e}")
+            return True
+
+    def _check_cooldown_with_session(
+        self,
+        user_id: int,
+        symbol: str,
+        timeframe: str,
+        strength: str,
+        cooldown_config: Dict[str, Any],
+        db: Session,
+    ) -> bool:
+        """Verificar se cooldown foi respeitado (com sessão fornecida)"""
+        try:
             # Obter configuração de cooldown para este timeframe e força
             tf_config = cooldown_config.get(timeframe, {})
             cooldown_minutes = tf_config.get(strength.lower(), 0)
@@ -263,26 +352,28 @@ class SignalDispatchService:
             if cooldown_minutes <= 0:
                 return True  # Sem cooldown configurado
 
-            db = next(get_db())
+            # Buscar configuração do usuário para verificar último sinal
+            config = (
+                db.query(UserMonitoringConfig)
+                .filter(UserMonitoringConfig.user_id == user_id)
+                .first()
+            )
 
-            # Buscar último sinal processado para este símbolo
+            if not config or not config.last_signal_at:
+                return True  # Usuário não encontrado ou sem histórico
+
+            # Verificar se está dentro do período de cooldown
             cutoff_time = datetime.now(timezone.utc) - timedelta(
                 minutes=cooldown_minutes
             )
 
-            recent_signal = (
-                db.query(SignalHistory)
-                .filter(
-                    and_(
-                        SignalHistory.symbol == symbol,
-                        SignalHistory.processed == True,  # noqa: E712
-                        SignalHistory.processed_at >= cutoff_time,
-                    )
+            if config.last_signal_at >= cutoff_time:
+                self.logger.info(
+                    f"Usuário {user_id} em cooldown para {symbol} ({cooldown_minutes}min)"
                 )
-                .first()
-            )
+                return False
 
-            return recent_signal is None
+            return True
 
         except Exception as e:
             self.logger.error(f"❌ Erro ao verificar cooldown: {e}")
@@ -293,41 +384,53 @@ class SignalDispatchService:
     ) -> bool:
         """Verificar se RSI atual tem diferença mínima do último sinal"""
         try:
+            db = next(get_db())
+            return self._check_rsi_difference_with_session(
+                user_id, symbol, current_rsi, min_difference, db
+            )
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao verificar diferença de RSI: {e}")
+            return True
+
+    def _check_rsi_difference_with_session(
+        self,
+        user_id: int,
+        symbol: str,
+        current_rsi: float,
+        min_difference: float,
+        db: Session,
+    ) -> bool:
+        """Verificar se RSI atual tem diferença mínima do último sinal (com sessão fornecida)"""
+        try:
             if min_difference <= 0:
                 return True  # Sem diferença mínima configurada
 
-            db = next(get_db())
-
-            # Buscar último sinal processado para este símbolo
-            last_signal = (
-                db.query(SignalHistory)
-                .filter(
-                    and_(
-                        SignalHistory.symbol == symbol,
-                        SignalHistory.processed == True,  # noqa: E712
-                    )
-                )
-                .order_by(desc(SignalHistory.processed_at))
+            # Buscar configuração do usuário para verificar último RSI
+            config = (
+                db.query(UserMonitoringConfig)
+                .filter(UserMonitoringConfig.user_id == user_id)
                 .first()
             )
 
-            if not last_signal:
-                return True  # Nenhum sinal anterior
+            if not config or not config.filter_config:
+                return True  # Usuário não encontrado ou sem histórico
 
-            # Obter RSI do último sinal
-            last_rsi_data = (
-                last_signal.indicator_data.get("RSI", {})
-                if last_signal.indicator_data
-                else {}
-            )
-            last_rsi = last_rsi_data.get("value", 0)
+            # Verificar último RSI armazenado para este símbolo
+            last_rsi_data = config.filter_config.get("last_rsi_by_symbol", {})
+            last_rsi = last_rsi_data.get(symbol, 0)
 
             if last_rsi == 0:
                 return True  # RSI anterior não disponível
 
             # Verificar diferença
             rsi_difference = abs(current_rsi - last_rsi)
-            return rsi_difference >= min_difference
+            is_valid = rsi_difference >= min_difference
+
+            self.logger.info(
+                f"Usuário {user_id} RSI {symbol}: {last_rsi} → {current_rsi} (diff: {rsi_difference:.1f}, min: {min_difference})"
+            )
+
+            return is_valid
 
         except Exception as e:
             self.logger.error(f"❌ Erro ao verificar diferença de RSI: {e}")

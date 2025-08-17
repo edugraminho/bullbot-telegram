@@ -167,7 +167,7 @@ class UserConfigService:
             )
 
             if active_only:
-                query = query.filter(UserMonitoringConfig.active == True)
+                query = query.filter(UserMonitoringConfig.active == True)  # noqa: E712
 
             configs = query.order_by(desc(UserMonitoringConfig.priority)).all()
 
@@ -197,7 +197,7 @@ class UserConfigService:
                     and_(
                         UserMonitoringConfig.user_id == user_id,
                         UserMonitoringConfig.config_name == config_name,
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                     )
                 )
                 .first()
@@ -238,7 +238,7 @@ class UserConfigService:
                     and_(
                         UserMonitoringConfig.user_id == user_id,
                         UserMonitoringConfig.config_name == config_name,
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                     )
                 )
                 .first()
@@ -291,7 +291,7 @@ class UserConfigService:
                     and_(
                         UserMonitoringConfig.user_id == user_id,
                         UserMonitoringConfig.config_name == config_name,
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                     )
                 )
                 .first()
@@ -364,7 +364,7 @@ class UserConfigService:
                     and_(
                         UserMonitoringConfig.user_id == user_id,
                         UserMonitoringConfig.config_name == config_name,
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                     )
                 )
                 .first()
@@ -401,7 +401,7 @@ class UserConfigService:
                     and_(
                         UserMonitoringConfig.user_id == user_id,
                         UserMonitoringConfig.config_name == config_name,
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                     )
                 )
                 .first()
@@ -577,7 +577,7 @@ class UserConfigService:
             db = next(get_db())
 
             query = db.query(UserMonitoringConfig).filter(
-                UserMonitoringConfig.active == True
+                UserMonitoringConfig.active == True  # noqa: E712
             )
 
             if chat_type:
@@ -635,7 +635,18 @@ class UserConfigService:
         """Incrementar contador de sinais recebidos"""
         try:
             db = next(get_db())
+            return self.increment_signals_received_with_session(chat_id, db)
+        except Exception as e:
+            self.logger.error(
+                f"Erro ao incrementar contador de sinais para {chat_id}: {e}"
+            )
+            return False
 
+    def increment_signals_received_with_session(
+        self, chat_id: str, db: Session, symbol: str = None, rsi_value: float = None
+    ) -> bool:
+        """Incrementar contador de sinais recebidos (com sessão fornecida)"""
+        try:
             config = (
                 db.query(UserMonitoringConfig)
                 .filter(UserMonitoringConfig.chat_id == str(chat_id))
@@ -645,10 +656,51 @@ class UserConfigService:
             if not config:
                 return False
 
+            now = datetime.now(timezone.utc)
+            today = now.date()
+
+            # Atualizar contadores básicos
             config.signals_received += 1
-            config.last_signal_at = datetime.now(timezone.utc)
+            config.last_signal_at = now
+
+            # Atualizar contadores específicos no filter_config
+            if not config.filter_config:
+                config.filter_config = {}
+
+            # Atualizar contador diário por símbolo
+            if symbol:
+                daily_counts = config.filter_config.get("daily_signal_counts", {})
+                today_str = today.isoformat()
+
+                # Reset se é um novo dia
+                if daily_counts.get("date") != today_str:
+                    daily_counts = {"date": today_str, "symbols": {}}
+
+                # Incrementar contador do símbolo
+                if "symbols" not in daily_counts:
+                    daily_counts["symbols"] = {}
+                daily_counts["symbols"][symbol] = (
+                    daily_counts["symbols"].get(symbol, 0) + 1
+                )
+
+                config.filter_config["daily_signal_counts"] = daily_counts
+
+            # Armazenar último RSI por símbolo para verificação de diferença
+            if symbol and rsi_value is not None:
+                if "last_rsi_by_symbol" not in config.filter_config:
+                    config.filter_config["last_rsi_by_symbol"] = {}
+                config.filter_config["last_rsi_by_symbol"][symbol] = rsi_value
+
+            # Forçar SQLAlchemy a detectar mudança no JSON
+            from sqlalchemy.orm.attributes import flag_modified
+
+            flag_modified(config, "filter_config")
+
             db.commit()
 
+            self.logger.info(
+                f"Contador atualizado para {chat_id}: {symbol} (RSI: {rsi_value})"
+            )
             return True
 
         except Exception as e:
@@ -665,7 +717,7 @@ class UserConfigService:
             total_subscribers = db.query(UserMonitoringConfig).count()
             active_subscribers = (
                 db.query(UserMonitoringConfig)
-                .filter(UserMonitoringConfig.active == True)
+                .filter(UserMonitoringConfig.active == True)  # noqa: E712
                 .count()
             )
 
@@ -674,7 +726,7 @@ class UserConfigService:
                 db.query(UserMonitoringConfig)
                 .filter(
                     and_(
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                         UserMonitoringConfig.chat_type == "private",
                     )
                 )
@@ -685,7 +737,7 @@ class UserConfigService:
                 db.query(UserMonitoringConfig)
                 .filter(
                     and_(
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                         UserMonitoringConfig.chat_type.in_(["group", "supergroup"]),
                     )
                 )
@@ -751,7 +803,7 @@ class UserConfigService:
                 db.query(UserMonitoringConfig)
                 .filter(
                     and_(
-                        UserMonitoringConfig.active == True,
+                        UserMonitoringConfig.active == True,  # noqa: E712
                         UserMonitoringConfig.last_activity < cutoff_date,
                     )
                 )
