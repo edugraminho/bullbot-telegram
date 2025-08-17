@@ -12,11 +12,17 @@ services:
     networks:
       - bullbot_network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
 
   celery_worker:
     build:
       context: .
-    command: celery -A src.tasks.celery_app worker --loglevel=info --queues=telegram
+    command: celery -A src.tasks.celery_app worker --loglevel=info --queues=telegram --concurrency=1 --max-memory-per-child=50000
     volumes:
       - .:/app
     depends_on:
@@ -25,6 +31,12 @@ services:
       - .env
     networks:
       - bullbot_network
+    deploy:
+      resources:
+        limits:
+          memory: 80M
+        reservations:
+          memory: 40M
 
   celery_beat:
     build:
@@ -38,6 +50,12 @@ services:
       - .env
     networks:
       - bullbot_network
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
 
   redis:
     image: redis:8.0-alpine
@@ -45,6 +63,17 @@ services:
       - "6380:6379"
     networks:
       - bullbot_network
+    deploy:
+      resources:
+        limits:
+          memory: 48M
+        reservations:
+          memory: 24M
+    command: >
+      redis-server
+      --maxmemory 32mb
+      --maxmemory-policy allkeys-lru
+      --save ""
 
 networks:
   bullbot_network:
