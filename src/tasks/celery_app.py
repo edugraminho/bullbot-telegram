@@ -23,6 +23,12 @@ celery_app.conf.update(
     # Timezone
     timezone="UTC",
     enable_utc=True,
+    # Task routing - usar fila específica para telegram
+    task_routes={
+        "src.tasks.telegram_tasks.*": {"queue": "telegram"},
+        "src.tasks.monitor_tasks.*": {"queue": "telegram"},
+    },
+    task_default_queue="telegram",
     # Concorrência e Performance
     worker_concurrency=settings.celery_worker_count,
     task_acks_late=settings.celery_task_acknowledge_late,
@@ -43,6 +49,13 @@ celery_app.conf.update(
         "master_name": "mymaster",
         "visibility_timeout": 3600,
     },
+    # Configurações para warnings de deprecação
+    worker_cancel_long_running_tasks_on_connection_loss=True,
+    broker_connection_retry_on_startup=True,
+    # Configurações de conexão Redis
+    broker_connection_retry=True,
+    broker_connection_max_retries=10,
+    broker_connection_retry_delay=0.5,
 )
 
 # Configuração de logging

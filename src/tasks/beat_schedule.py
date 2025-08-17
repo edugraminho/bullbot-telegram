@@ -9,25 +9,31 @@ beat_schedule = {
     "process-signals-every-15sec": {
         "task": "src.tasks.telegram_tasks.process_unprocessed_signals",
         "schedule": 15.0,  # 15 segundos - detecta sinais novos rapidamente
-        "options": {"queue": "default"},
+        "options": {"queue": "telegram"},
     },
     # Testar conexões a cada 5 minutos
     "test-connections-every-5min": {
         "task": "src.tasks.telegram_tasks.test_connections",
         "schedule": 300.0,  # 5 minutos
-        "options": {"queue": "default"},
+        "options": {"queue": "telegram"},
     },
     # Obter status do sistema a cada 15 minutos
     "get-system-status-every-15min": {
         "task": "src.tasks.telegram_tasks.get_system_status",
         "schedule": 900.0,  # 15 minutos
-        "options": {"queue": "default"},
+        "options": {"queue": "telegram"},
+    },
+    # Obter estatísticas de assinantes a cada 30 minutos
+    "subscription-stats-every-30min": {
+        "task": "src.tasks.telegram_tasks.get_subscription_stats",
+        "schedule": 1800.0,  # 30 minutos
+        "options": {"queue": "telegram"},
     },
     # Limpeza de cache e otimizações a cada hora
     "cleanup-every-hour": {
         "task": "src.tasks.telegram_tasks.cleanup_old_data",
         "schedule": 3600.0,  # 1 hora
-        "options": {"queue": "maintenance"},
+        "options": {"queue": "telegram"},
     },
 }
 

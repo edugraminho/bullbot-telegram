@@ -16,7 +16,7 @@ services:
   celery_worker:
     build:
       context: .
-    command: celery -A src.tasks.celery_app worker --loglevel=info
+    command: celery -A src.tasks.celery_app worker --loglevel=info --queues=telegram
     volumes:
       - .:/app
     depends_on:

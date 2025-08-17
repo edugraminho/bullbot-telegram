@@ -217,6 +217,25 @@ def start_monitoring_cycle(exchanges_symbols, **kwargs):
 
 
 @celery_app.task
+def monitor_rsi_signals(**kwargs):
+    """
+    Task de compatibilidade - redireciona para o sistema atual
+    """
+    try:
+        logger.info("Task monitor_rsi_signals executada - redirecionando para process_unprocessed_signals")
+        
+        # Importar e executar a task atual
+        from src.tasks.telegram_tasks import process_unprocessed_signals
+        
+        result = process_unprocessed_signals.delay()
+        return {"status": "redirected", "new_task_id": result.id}
+        
+    except Exception as e:
+        logger.error(f"❌ Erro na task de compatibilidade: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+@celery_app.task
 def get_monitoring_status(**kwargs):
     """
     Obtém o status atual do sistema de monitoramento
