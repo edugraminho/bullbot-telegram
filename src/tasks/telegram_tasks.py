@@ -188,18 +188,14 @@ async def send_signal_to_user(signal_data, chat_id):
         bool: True se enviado com sucesso
     """
     try:
-        from telegram import Bot
         from telegram.constants import ParseMode
-        from src.utils.config import settings
-
-        bot = Bot(token=settings.telegram_bot_token)
 
         # Formatar mensagem do sinal
         message = _format_signal_message_for_user(signal_data)
 
-        # Enviar mensagem
-        await bot.send_message(
-            chat_id=chat_id,
+        # Usar o telegram_client configurado
+        await telegram_client.bot.send_message(
+            chat_id=int(chat_id),
             text=message,
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
@@ -219,7 +215,7 @@ def _format_signal_message_for_user(signal_data):
 
         symbol = signal_data.get("symbol", "UNKNOWN")
         signal_type = signal_data.get("signal_type", "UNKNOWN")
-        rsi_value = signal_data.get("indicator_data", {}).get("RSI", {}).get("value", 0)
+        rsi_value = signal_data.get("indicator_data", {}).get("rsi_value", 0)
         current_price = signal_data.get("price", 0)
         strength = signal_data.get("strength", "UNKNOWN")
         timeframe = signal_data.get("timeframe", "UNKNOWN")
