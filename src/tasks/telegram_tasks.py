@@ -132,12 +132,41 @@ def process_unprocessed_signals(self):
 
 def await_sync(coro):
     """Helper para executar código assíncrono em contexto síncrono"""
+    import concurrent.futures
+
+    def run_in_new_thread():
+        """Executar em thread isolada com novo event loop"""
+        try:
+            # Criar novo loop em thread isolada
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+
+            try:
+                result = new_loop.run_until_complete(coro)
+                return result
+            finally:
+                # Fechar o loop corretamente
+                try:
+                    new_loop.close()
+                except Exception as e:
+                    logger.warning(f"Erro ao fechar loop: {e}")
+
+        except Exception as e:
+            logger.error(f"❌ Erro em thread assíncrona: {e}")
+            raise
+
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        # Sempre usar thread pool para isolar completamente o event loop
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(run_in_new_thread)
+            return future.result(timeout=120)  # Timeout de 2 minutos
+
+    except concurrent.futures.TimeoutError:
+        logger.error("❌ Timeout ao executar código assíncrono")
+        raise
+    except Exception as e:
+        logger.error(f"❌ Erro em await_sync: {e}")
+        raise
 
 
 async def send_signal_to_users(signal_data, eligible_users):
@@ -187,25 +216,51 @@ async def send_signal_to_user(signal_data, chat_id):
     Returns:
         bool: True se enviado com sucesso
     """
-    try:
-        from telegram.constants import ParseMode
+    max_retries = 3
+    retry_delay = 1
 
-        # Formatar mensagem do sinal
-        message = _format_signal_message_for_user(signal_data)
+    for attempt in range(max_retries):
+        try:
+            from telegram.constants import ParseMode
+            from telegram.error import NetworkError, TelegramError, TimedOut
 
-        # Usar o telegram_client configurado
-        await telegram_client.bot.send_message(
-            chat_id=int(chat_id),
-            text=message,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
+            # Formatar mensagem do sinal
+            message = _format_signal_message_for_user(signal_data)
 
-        return True
+            # Usar o telegram_client configurado
+            await telegram_client.bot.send_message(
+                chat_id=int(chat_id),
+                text=message,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
 
-    except Exception as e:
-        logger.error(f"❌ Erro ao enviar sinal para usuário {chat_id}: {e}")
-        return False
+            return True
+
+        except (NetworkError, TimedOut) as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"⚠️ Erro de rede ao enviar para {chat_id}, tentativa {attempt + 1}/{max_retries}: {e}"
+                )
+                await asyncio.sleep(retry_delay * (attempt + 1))
+                continue
+            else:
+                logger.error(
+                    f"❌ Falha definitiva ao enviar para {chat_id} após {max_retries} tentativas: {e}"
+                )
+                return False
+
+        except TelegramError as e:
+            logger.error(f"❌ Erro do Telegram ao enviar para {chat_id}: {e}")
+            return False
+
+        except Exception as e:
+            logger.error(
+                f"❌ Erro inesperado ao enviar sinal para usuário {chat_id}: {e}"
+            )
+            return False
+
+    return False
 
 
 def _format_signal_message_for_user(signal_data):
