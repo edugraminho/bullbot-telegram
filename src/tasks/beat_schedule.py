@@ -5,10 +5,10 @@ Agendamento de tasks para processamento automático de sinais
 
 # Configuração do Beat Schedule
 beat_schedule = {
-    # Processar sinais não processados a cada 15 segundos (único serviço de busca)
-    "process-signals-every-15sec": {
+    # Processar sinais não processados a cada 1 minuto (otimizado para recursos)
+    "process-signals-every-1min": {
         "task": "src.tasks.telegram_tasks.process_unprocessed_signals",
-        "schedule": 15.0,  # 15 segundos - detecta sinais novos rapidamente
+        "schedule": 60.0,  # 1 minuto - balanceia responsividade e eficiência
         "options": {"queue": "telegram"},
     },
     # Testar conexões a cada 5 minutos
