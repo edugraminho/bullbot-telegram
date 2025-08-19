@@ -84,4 +84,4 @@ services:
 networks:
   bullbot_network:
     external: true
-    name: bullbot-signals_bullbot_network 
+    name: bullbot-shared-network 
