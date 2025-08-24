@@ -1,21 +1,48 @@
 # 🔗 Integração BullBot Signals ↔ BullBot Telegram
 
-Este documento explica como os dois projetos se comunicam e como configurar a integração.
+Este documento explica como os dois projetos se comunicam e como configurar a integração baseada no **sistema avançado de confluência de indicadores**.
 
 ## 🏗️ Arquitetura da Integração
 
 ```
-┌─────────────────┐    ┌─────────────────┐
-│  BullBot        │    │  BullBot        │
-│  Signals        │    │  Telegram       │
-│                 │    │                 │
-│  • Monitoramento│    │  • Bot Telegram │
-│  • Cálculo RSI  │    │  • Envio de     │
-│  • Banco de     │◄───┤    mensagens    │
-│    dados        │    │  • Gestão de    │
-│  • API REST     │    │    assinantes   │
-└─────────────────┘    └─────────────────┘
+┌─────────────────────────────────────────────────┐    ┌─────────────────────────────────┐
+│  BullBot Signals                               │    │  BullBot Telegram               │
+│                                                 │    │                                 │
+│  🧮 Sistema de Confluência                     │    │  🤖 Bot Telegram                │
+│  • RSI + EMA + MACD + Volume                   │◄───┤  • Configurações Personalizadas │
+│  • Score 0-8 pontos                            │    │  • Filtros Anti-Spam            │
+│  • Múltiplas Exchanges                         │    │  • Envio Inteligente            │
+│  • Análise 24/7 via Celery                     │    │  • Gestão de Assinantes         │
+│  • API REST FastAPI                            │    │  • Processamento Assíncrono     │
+│  • Banco PostgreSQL + Redis                    │    │  • Redis + Celery               │
+└─────────────────────────────────────────────────┘    └─────────────────────────────────┘
 ```
+
+## 📊 Sistema de Confluência de Indicadores
+
+### 🎯 O que é Confluência?
+
+**Confluência** é quando múltiplos indicadores técnicos concordam e apontam na mesma direção, aumentando drasticamente a probabilidade de sucesso do sinal.
+
+**Analogia**: Em vez de confiar apenas em uma pessoa te dizendo "pode atravessar a rua", você espera que 4-5 pessoas concordem. **Maior consenso = Maior confiança!**
+
+### 📊 Sistema de Pontuação (0-8 pontos)
+
+| Indicador | Peso | O que Confirma |
+|-----------|------|----------------|
+| **RSI** | 2 pontos | Zona de sobrecompra/sobrevenda |
+| **EMA** | 3 pontos | Tendência + posição do preço |
+| **MACD** | 1 ponto | Momentum bullish/bearish |
+| **Volume** | 2 pontos | Volume alto + OBV trending |
+
+**Resultado**: Sinais mais confiáveis, menos falsos positivos, melhor timing de entrada.
+
+### ⚙️ Thresholds por Timeframe
+
+- **15 minutos**: Score mínimo **4 pontos** para gerar sinal
+- **1 hora**: Score mínimo **4 pontos** para gerar sinal  
+- **4 horas**: Score mínimo **5 pontos** para gerar sinal
+- **1 dia**: Score mínimo **5 pontos** para gerar sinal
 
 ## 📊 Compartilhamento de Dados
 
@@ -23,31 +50,127 @@ Este documento explica como os dois projetos se comunicam e como configurar a in
 
 O **BullBot Telegram** se conecta ao mesmo banco PostgreSQL do **BullBot Signals** para:
 
-1. **Ler sinais**: Consome sinais da tabela `signal_history`
-2. **Gestão de assinantes**: Gerencia assinaturas na tabela `telegram_subscriptions`
-3. **Configurações**: Acessa configurações da tabela `monitoring_config`
+1. **Ler sinais**: Consome sinais da tabela `signal_history` com scores de confluência
+2. **Gestão de assinantes**: Gerencia assinaturas na tabela `user_monitoring_configs`
+3. **Configurações**: Acessa configurações personalizadas por usuário
 
 ### Tabelas Utilizadas
 
 ```sql
--- Sinais gerados pelo BullBot Signals
+-- Sinais gerados pelo BullBot Signals (Sistema de Confluência)
 signal_history (
-  id, symbol, rsi_value, signal_type, strength, 
-  price, timeframe, source, telegram_sent, 
-  message, created_at
+  id, symbol, signal_type, strength, price, timeframe, source,
+  indicator_type, indicator_data, indicator_config,
+  confidence_score, combined_score, processed, processed_at, processed_by,
+  volume_24h, price_change_24h, processing_time_ms, created_at
 )
 
--- Assinantes do bot (gerenciado pelo BullBot Telegram)
-telegram_subscriptions (
-  id, chat_id, chat_type, symbols_filter, 
-  active, created_at
+-- Configurações e Assinantes (gerenciado pelo BullBot Telegram)
+user_monitoring_configs (
+  id, user_id, chat_id, chat_type, username, first_name, last_name,
+  config_type, priority, config_name, description, active,
+  symbols, timeframes, indicators_config, filter_config,
+  last_activity, signals_received, last_signal_at, created_at, updated_at
 )
+```
 
--- Configurações do sistema (gerenciado pelo BullBot Signals)
-monitoring_config (
-  id, name, symbols, rsi_oversold, rsi_overbought, 
-  timeframes, active, updated_at
+## 🔄 Fluxo de Dados Avançado
+
+### 1. Geração de Sinais (BullBot Signals)
+
+```python
+# BullBot Signals gera sinais com sistema de confluência
+signal = SignalHistory(
+    symbol="BTC",
+    signal_type="SELL",
+    strength="WEAK",
+    price=0.15895542,
+    timeframe="15m",
+    source="binance",
+    indicator_type=["RSI", "EMA", "MACD", "Volume"],
+    indicator_data={
+        "confluence_score": {
+            "total_score": 4,
+            "max_possible_score": 8,
+            "details": {
+                "RSI": {
+                    "score": 2,
+                    "value": 82.51,
+                    "reason": "RSI 82.51 em zona de sobrecompra",
+                    "levels": {
+                        "oversold": 20,
+                        "overbought": 80,
+                        "current_zone": "overbought"
+                    }
+                },
+                "EMA": {
+                    "score": 1,
+                    "trending_up": True,
+                    "reason": "EMA favoravel ao sinal",
+                    "values": {
+                        "ema_9": 0.15404416,
+                        "ema_21": 0.1482638,
+                        "ema_50": 0.14411452,
+                        "price_above_ema_50": True
+                    }
+                },
+                "MACD": {
+                    "score": 0,
+                    "is_bullish": True,
+                    "reason": "MACD nao confirma o sinal",
+                    "values": {
+                        "macd_line": 0.00497119,
+                        "signal_line": 0.00282583,
+                        "histogram": 0.00214536,
+                        "crossover": "bullish"
+                    }
+                },
+                "Volume": {
+                    "score": 1,
+                    "is_high_volume": True,
+                    "obv_trending_up": True,
+                    "reason": "Volume suporta o sinal",
+                    "values": {
+                        "volume_ratio": 1.721,
+                        "obv": 20192145.0,
+                        "vwap": 0.15895542,
+                        "price_vs_vwap": "above",
+                        "volume_threshold": "172%"
+                    }
+                }
+            }
+        },
+        "rsi_value": 82.51,
+        "recommendation": "Sinal de VENDA FRACO - Score: 4/8",
+        "risk_level": "ALTO"
+    },
+    combined_score=4,  # Score total de confluência
+    confidence_score=50.0,  # Porcentagem de confiança
+    processed=False,  # Flag para controle
+    message="Sinal de venda com score 4/8 - Confluência WEAK"
 )
+```
+
+### 2. Consumo de Sinais (BullBot Telegram)
+
+```python
+# BullBot Telegram consome sinais não processados com scores
+signals = db.query(SignalHistory).filter(
+    SignalHistory.processed == False,
+    SignalHistory.combined_score >= 4  # Score mínimo
+).all()
+
+# Envia para assinantes baseado em configurações personalizadas
+for signal in signals:
+    eligible_users = get_eligible_users(signal)
+    for user in eligible_users:
+        if should_send_signal(user, signal):
+            await send_personalized_signal(user, signal)
+    
+    # Marca como processado
+    signal.processed = True
+    signal.processed_at = datetime.utcnow()
+    signal.processed_by = "telegram_bot"
 ```
 
 ## ⚙️ Configuração da Integração
@@ -58,10 +181,13 @@ No arquivo `.env` do **BullBot Signals**:
 
 ```bash
 # Database
-DATABASE_URL=postgresql://user:password@host:5432/bullbot_signals
+DATABASE_URL=postgresql://bullbot_user:bullbot_password_2025@db:5432/bullbot_signals
 
-# Telegram (opcional - para testes)
-TELEGRAM_BOT_TOKEN=your_bot_token_here
+# Logging
+LOG_LEVEL=INFO
+
+# Redis (compartilhado)
+REDIS_URL=redis://redis:6379/0
 ```
 
 ### 2. Configurar BullBot Telegram
@@ -73,65 +199,101 @@ No arquivo `.env` do **BullBot Telegram**:
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 
 # Database (mesmo banco do BullBot Signals)
-DATABASE_URL=postgresql://user:password@host:5432/bullbot_signals
+DATABASE_URL=postgresql://bullbot_user:bullbot_password_2025@db:5432/bullbot_signals
 
-# Redis
+# Redis (compartilhado)
 REDIS_URL=redis://redis:6379/0
 
 # Logging
 LOG_LEVEL=INFO
 ```
 
-### 3. Ordem de Inicialização
+### 3. Rede Docker Compartilhada
 
-1. **Primeiro**: Iniciar BullBot Signals
+Ambos os projetos devem usar a mesma rede Docker:
+
+```yaml
+# Em ambos os docker-compose.yml
+networks:
+  bullbot_network:
+    external: true
+    name: bullbot-shared-network
+```
+
+### 4. Ordem de Inicialização
+
+1. **Primeiro**: Criar rede compartilhada
+   ```bash
+   docker network create bullbot-shared-network
+   ```
+
+2. **Segundo**: Iniciar BullBot Signals
    ```bash
    cd bullbot-signals
    docker-compose up -d
    ```
 
-2. **Depois**: Iniciar BullBot Telegram
+3. **Terceiro**: Iniciar BullBot Telegram
    ```bash
    cd bullbot-telegram
    docker-compose up -d
    ```
 
-## 🔄 Fluxo de Dados
+## 🎯 Sistema de Elegibilidade Avançado
 
-### 1. Geração de Sinais (BullBot Signals)
-
+### **🎯 Filtros por Score de Confluência**
 ```python
-# BullBot Signals gera sinais e salva no banco
-signal = SignalHistory(
-    symbol="BTC",
-    rsi_value=25.0,
-    signal_type="BUY",
-    strength="STRONG",
-    price=67530.25,
-    timeframe="15m",
-    source="binance",
-    telegram_sent=False,  # Flag para controle
-    message="Sinal de compra detectado"
-)
+# Para cada sinal, o sistema verifica:
+✅ Score mínimo por timeframe (15m: 4+, 4h: 5+)
+✅ Símbolo está na lista do usuário?
+✅ Timeframe está na lista do usuário?
+✅ Indicadores habilitados na configuração?
+✅ Não está em cooldown?
+✅ Não atingiu limite diário?
+✅ Score atende threshold personalizado?
 ```
 
-### 2. Consumo de Sinais (BullBot Telegram)
-
-```python
-# BullBot Telegram consome sinais não enviados
-signals = db.query(SignalHistory).filter(
-    SignalHistory.telegram_sent == False
-).all()
-
-# Envia para assinantes e marca como enviado
-for signal in signals:
-    await send_to_subscribers(signal)
-    signal.telegram_sent = True
+### **⚙️ Configuração Personalizada por Usuário**
+```json
+{
+  "indicators_config": {
+    "RSI": {
+      "enabled": true,
+      "period": 14,
+      "oversold": 20,
+      "overbought": 80
+    },
+    "EMA": {
+      "enabled": true,
+      "short_period": 9,
+      "medium_period": 21,
+      "long_period": 50
+    },
+    "MACD": {
+      "enabled": true,
+      "fast_period": 12,
+      "slow_period": 26,
+      "signal_period": 9
+    },
+    "Volume": {
+      "enabled": true,
+      "sma_period": 20,
+      "threshold_multiplier": 1.2
+    },
+    "Confluence": {
+      "enabled": true,
+      "min_score_15m": 4,
+      "min_score_1h": 4,
+      "min_score_4h": 5,
+      "min_score_1d": 5
+    }
+  }
+}
 ```
 
 ## 🚀 Deploy
 
-### Opção 1: Containers Separados
+### Opção 1: Containers Separados (Recomendado)
 
 ```bash
 # Servidor 1: BullBot Signals
@@ -154,29 +316,77 @@ services:
   # BullBot Signals
   signals_app:
     build: ./bullbot-signals
-    # ... configurações
+    ports:
+      - "8088:8000"
+    depends_on:
+      - db
+      - redis
+    networks:
+      - bullbot_network
 
   signals_worker:
     build: ./bullbot-signals
-    # ... configurações
+    command: celery -A src.tasks.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+      - db
+    networks:
+      - bullbot_network
+
+  signals_beat:
+    build: ./bullbot-signals
+    command: celery -A src.tasks.celery_app beat --loglevel=warning
+    depends_on:
+      - redis
+      - db
+    networks:
+      - bullbot_network
 
   # BullBot Telegram
   telegram_bot:
     build: ./bullbot-telegram
-    # ... configurações
+    depends_on:
+      - db
+      - redis
+    networks:
+      - bullbot_network
 
   telegram_worker:
     build: ./bullbot-telegram
-    # ... configurações
+    command: celery -A src.tasks.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+      - db
+    networks:
+      - bullbot_network
 
   # Infraestrutura compartilhada
   db:
-    image: postgres:17.1
-    # ... configurações
+    image: postgres:17.1-alpine
+    environment:
+      POSTGRES_DB: bullbot_signals
+      POSTGRES_USER: bullbot_user
+      POSTGRES_PASSWORD: bullbot_password_2025
+    ports:
+      - "5438:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - bullbot_network
 
   redis:
-    image: redis:8.0
-    # ... configurações
+    image: redis:8.0-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - bullbot_network
+
+volumes:
+  pgdata:
+
+networks:
+  bullbot_network:
+    driver: bridge
 ```
 
 ## 🔧 Monitoramento
@@ -184,11 +394,14 @@ services:
 ### Logs do BullBot Signals
 
 ```bash
-# Logs de monitoramento
+# Logs de monitoramento (sistema de confluência)
 docker-compose logs -f signals_worker
 
-# Logs da API
+# Logs da API FastAPI
 docker-compose logs -f signals_app
+
+# Logs do scheduler
+docker-compose logs -f signals_beat
 ```
 
 ### Logs do BullBot Telegram
@@ -216,7 +429,18 @@ db.close()
 "
 ```
 
-### Testar Envio de Sinal
+### Testar Sistema de Confluência
+
+```bash
+# No BullBot Signals
+docker-compose exec signals_app python -c "
+from src.core.services.confluence_analyzer import ConfluenceAnalyzer
+analyzer = ConfluenceAnalyzer()
+print('✅ Sistema de confluência carregado:', analyzer)
+"
+```
+
+### Testar Envio de Sinal com Score
 
 ```bash
 # No BullBot Telegram
@@ -224,13 +448,46 @@ docker-compose exec telegram_worker python -c "
 from src.tasks.telegram_tasks import send_telegram_signal
 signal_data = {
     'symbol': 'TEST',
-    'signal_type': 'BUY',
-    'rsi_value': 25.0,
-    'current_price': 0.001234,
-    'strength': 'STRONG',
+    'signal_type': 'SELL',
+    'strength': 'WEAK',
+    'price': 0.15895542,
     'timeframe': '15m',
-    'message': '🧪 Teste de integração',
-    'source': 'test',
+    'source': 'binance',
+    'indicator_type': ['RSI', 'EMA', 'MACD', 'Volume'],
+    'indicator_data': {
+        'confluence_score': {
+            'total_score': 4,
+            'max_possible_score': 8,
+            'details': {
+                'RSI': {
+                    'score': 2,
+                    'value': 82.51,
+                    'reason': 'RSI 82.51 em zona de sobrecompra'
+                },
+                'EMA': {
+                    'score': 1,
+                    'trending_up': True,
+                    'reason': 'EMA favoravel ao sinal'
+                },
+                'MACD': {
+                    'score': 0,
+                    'is_bullish': True,
+                    'reason': 'MACD nao confirma o sinal'
+                },
+                'Volume': {
+                    'score': 1,
+                    'is_high_volume': True,
+                    'reason': 'Volume suporta o sinal'
+                }
+            }
+        },
+        'rsi_value': 82.51,
+        'recommendation': 'Sinal de VENDA FRACO - Score: 4/8',
+        'risk_level': 'ALTO'
+    },
+    'combined_score': 4,
+    'confidence_score': 50.0,
+    'message': '🧪 Teste de confluência - Score: 4/8',
     'timestamp': '2025-01-31T00:00:00Z'
 }
 task = send_telegram_signal.delay(signal_data)
@@ -242,9 +499,9 @@ print('🧪 Task de teste agendada:', task.id)
 
 ### Isolamento de Redes
 
-- Cada projeto pode usar redes Docker separadas
-- Comunicação apenas via banco de dados
-- Redis separado para evitar conflitos
+- Rede Docker compartilhada `bullbot-shared-network`
+- Comunicação via banco de dados PostgreSQL
+- Redis compartilhado para Celery
 
 ### Controle de Acesso
 
@@ -258,8 +515,9 @@ print('🧪 Task de teste agendada:', task.id)
 
 **Solução:**
 1. Verificar conexão com banco
-2. Confirmar que BullBot Signals está gerando sinais
-3. Verificar se `telegram_sent = False` nos sinais
+2. Confirmar que BullBot Signals está gerando sinais com `processed = False`
+3. Verificar se `combined_score >= 4` nos sinais
+4. Confirmar que rede Docker está compartilhada
 
 ### Problema: Bot não responde
 
@@ -267,10 +525,20 @@ print('🧪 Task de teste agendada:', task.id)
 1. Verificar `TELEGRAM_BOT_TOKEN`
 2. Confirmar que o bot está ativo
 3. Verificar logs do container `telegram_bot`
+4. Confirmar que Redis está funcionando
 
 ### Problema: Sinais duplicados
 
 **Solução:**
-1. Verificar se `telegram_sent` está sendo marcado corretamente
+1. Verificar se `processed` está sendo marcado corretamente
 2. Confirmar que não há múltiplas instâncias rodando
-3. Verificar configuração de workers 
+3. Verificar configuração de workers
+4. Confirmar que filtros anti-spam estão funcionando
+
+### Problema: Sistema de confluência não funciona
+
+**Solução:**
+1. Verificar se BullBot Signals está calculando scores
+2. Confirmar que `indicator_data` está sendo preenchido
+3. Verificar se `combined_score` está sendo calculado
+4. Confirmar que thresholds estão configurados corretamente 
